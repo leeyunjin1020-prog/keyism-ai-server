@@ -1,10 +1,17 @@
+import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+from openai import OpenAI  # 👈 추가
 
 app = Flask(__name__)
 CORS(app)
 
+# ✅ OpenAI 클라이언트 생성
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
 def pick_key(user_text: str) -> str:
+    """(선택) 키워드 기반 백업용: 혹시 AI 호출 실패 시 대비"""
     t = user_text.lower()
 
     anger_keywords = [
@@ -31,17 +38,38 @@ def pick_key(user_text: str) -> str:
         return "FREEDOM"
     if any(w in t for w in love_keywords):
         return "LOVE"
-
-    # 키워드가 하나도 안 걸리면 기본적으로 'SILENCE'로 보냄
     return "SILENCE"
 
+
+# ✅ Render 깨우기용 헬스 체크 라우트
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
+# ✅ 메인: AI 감정 분석 라우트
 @app.route("/unlock", methods=["POST"])
 def unlock():
     data = request.get_json()
     feeling = data.get("feeling", "")
-    key_type = pick_key(feeling)
+
+    try:
+        # OpenAI에 감정 분류 요청
+        prompt = f"다음 문장의 감정을 ANGER, SILENCE, FREEDOM, LOVE 중 하나로 분류해줘:\n\n'{feeling}'"
+        response = client.responses.create(
+            model="gpt-4.1-mini",  # gpt-4.1-mini는 빠르고 저렴
+            input=prompt,
+        )
+        key_type = response.output[0].content[0].text.strip().upper()
+
+    except Exception as e:
+        print(f"OpenAI API error: {e}")
+        # API 실패 시 키워드 기반 fallback
+        key_type = pick_key(feeling)
+
     return jsonify({"keyType": key_type})
 
+
 if __name__ == "__main__":
-    # Render 등 PaaS에서 필요: 외부에서 접근 가능한 host로 열기
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
